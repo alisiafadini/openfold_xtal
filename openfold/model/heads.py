@@ -56,8 +56,8 @@ class AuxiliaryHeads(nn.Module):
         aux_out = {}
 
         ### AF EDIT
-        # lddt_logits = self.plddt(outputs["sm"]["single"])
-        lddt_logits = self.plddt(outputs["single"])
+        lddt_logits = self.plddt(outputs["sm"]["single"])
+        # lddt_logits = self.plddt(outputs["single"])
         aux_out["lddt_logits"] = lddt_logits
 
         # Required for relaxation later on
