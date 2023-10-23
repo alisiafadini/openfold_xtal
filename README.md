@@ -29,7 +29,7 @@ vice versa (see `scripts/convert_of_weights_to_jax.py`).
 
 OpenFold has the following advantages over the reference implementation:
 
-- **Faster inference** on GPU, sometimes by as much as 2x. The greatest speedups are achieved on (>= Ampere) GPUs.
+- **Faster inference** on GPU, sometimes by as much as 2x. The greatest speedups are achieved on Ampere or higher architecture GPUs.
 - **Inference on extremely long chains**, made possible by our implementation of low-memory attention 
 ([Rabe & Staats 2021](https://arxiv.org/pdf/2112.05682.pdf)). OpenFold can predict the structures of
   sequences with more than 4000 residues on a single A100, and even longer ones with CPU offloading.
@@ -231,6 +231,28 @@ efficent AlphaFold-Multimer more than double the time. Use the
 `long_sequence_inference` config option to enable all of these interventions
 at once. The `run_pretrained_openfold.py` script can enable this config option with the 
 `--long_sequence_inference` command line option
+
+#### Single-Sequence Model Inference
+To run inference for a sequence using the single-sequence model, first you would need the ESM-1b embedding for the sequence. For this you need to set up the [ESM](https://www.github.com/facebookresearch/esm.git) model on your system. Once you have the the setup ready, use the following command in the ESM model directory to generate an embedding:
+
+```bash
+cd <esm_dir>
+python scripts/extract.py esm1b_t33_650M_UR50S <fasta> output_dir --include per_tok
+```
+
+Once you have the `*.pt` embedding file, you can place it in that sequence's  alignments directory (same as that used by the MSA model of OF). That is, inside the top-level alignments directory, there will be one subdirectory for each sequence you want to run inference on, like so: `alignments_dir/{sequence_id}/{sequence_id}.pt`. You can also place a `*.hhr` file in the same directory, which can contain the details about the structures that you want to use as templates.
+
+Now, you are ready to run inference:
+```bash
+python run_pretrained_openfold.py \
+    fasta_dir \
+    data/pdb_mmcif/mmcif_files/ \
+    --use_precomputed_alignments alignments_dir \
+    --output_dir ./ \
+    --model_device "cuda:0" \
+    --config_preset "seq_model_esm1b_ptm" \
+    --openfold_checkpoint_path openfold/resources/openfold_params/seq_model_esm1b_ptm.pt
+```
 
 ### Training
 
@@ -439,7 +461,7 @@ Please cite our paper:
 
 ```bibtex
 @article {Ahdritz2022.11.20.517210,
-	author = {Ahdritz, Gustaf and Bouatta, Nazim and Kadyan, Sachin and Xia, Qinghui and Gerecke, William and O{\textquoteright}Donnell, Timothy J and Berenberg, Daniel and Fisk, Ian and Zanichelli, Niccolò and Zhang, Bo and Nowaczynski, Arkadiusz and Wang, Bei and Stepniewska-Dziubinska, Marta M and Zhang, Shang and Ojewole, Adegoke and Guney, Murat Efe and Biderman, Stella and Watkins, Andrew M and Ra, Stephen and Lorenzo, Pablo Ribalta and Nivon, Lucas and Weitzner, Brian and Ban, Yih-En Andrew and Sorger, Peter K and Mostaque, Emad and Zhang, Zhao and Bonneau, Richard and AlQuraishi, Mohammed},
+	author = {Ahdritz, Gustaf and Bouatta, Nazim and Floristean, Christina and Kadyan, Sachin and Xia, Qinghui and Gerecke, William and O{\textquoteright}Donnell, Timothy J and Berenberg, Daniel and Fisk, Ian and Zanichelli, Niccolò and Zhang, Bo and Nowaczynski, Arkadiusz and Wang, Bei and Stepniewska-Dziubinska, Marta M and Zhang, Shang and Ojewole, Adegoke and Guney, Murat Efe and Biderman, Stella and Watkins, Andrew M and Ra, Stephen and Lorenzo, Pablo Ribalta and Nivon, Lucas and Weitzner, Brian and Ban, Yih-En Andrew and Sorger, Peter K and Mostaque, Emad and Zhang, Zhao and Bonneau, Richard and AlQuraishi, Mohammed},
 	title = {{O}pen{F}old: {R}etraining {A}lpha{F}old2 yields new insights into its learning mechanisms and capacity for generalization},
 	elocation-id = {2022.11.20.517210},
 	year = {2022},

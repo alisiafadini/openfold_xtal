@@ -323,6 +323,7 @@ class EvoformerBlock(nn.Module):
         transition_n: int,
         msa_dropout: float,
         pair_dropout: float,
+        no_column_attention: bool,
         inf: float,
         eps: float,
     ):
@@ -336,12 +337,15 @@ class EvoformerBlock(nn.Module):
             inf=inf,
         )
 
-        self.msa_att_col = MSAColumnAttention(
-            c_m,
-            c_hidden_msa_att,
-            no_heads_msa,
-            inf=inf,
-        )
+        # Specifically, seqemb mode does not use column attention
+        self.no_column_attention = no_column_attention
+        if self.no_column_attention == False:
+            self.msa_att_col = MSAColumnAttention(
+                c_m,
+                c_hidden_msa_att,
+                no_heads_msa,
+                inf=inf,
+            )
 
         self.msa_dropout_layer = DropoutRowwise(msa_dropout)
 
@@ -397,17 +401,19 @@ class EvoformerBlock(nn.Module):
             ),
             inplace=inplace_safe,
         )
-        
-        m = add(m, 
-            self.msa_att_col(
-                m, 
-                mask=msa_mask, 
-                chunk_size=chunk_size,
-                use_lma=use_lma,
-                use_flash=use_flash,
-            ),
-            inplace=inplace_safe,
-        )
+
+        # Specifically, column attention is not used in seqemb mode.
+        if self.no_column_attention == False:
+            m = add(m,
+                self.msa_att_col(
+                    m,
+                    mask=msa_mask,
+                    chunk_size=chunk_size,
+                    use_lma=use_lma,
+                    use_flash=use_flash,
+                ),
+                inplace=inplace_safe,
+            )
 
         if(not inplace_safe):
             input_tensors = [m, input_tensors[1]]
@@ -595,6 +601,7 @@ class EvoformerStack(nn.Module):
         msa_dropout: float,
         pair_dropout: float,
         blocks_per_ckpt: int,
+        no_column_attention: bool,
         inf: float,
         eps: float,
         clear_cache_between_blocks: bool = False, 
@@ -632,6 +639,9 @@ class EvoformerStack(nn.Module):
                 Dropout used for pair activations
             blocks_per_ckpt:
                 Number of Evoformer blocks in each activation checkpoint
+            no_column_attention:
+                When True, doesn't use column attention. Required for running
+                sequence embedding mode
             clear_cache_between_blocks:
                 Whether to clear CUDA's GPU memory cache between blocks of the
                 stack. Slows down each block but can reduce fragmentation
@@ -658,6 +668,7 @@ class EvoformerStack(nn.Module):
                 transition_n=transition_n,
                 msa_dropout=msa_dropout,
                 pair_dropout=pair_dropout,
+                no_column_attention=no_column_attention,
                 inf=inf,
                 eps=eps,
             )

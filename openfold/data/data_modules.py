@@ -182,6 +182,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             alignment_dir=alignment_dir,
             chain_id=chain_id,
             alignment_index=alignment_index,
+            seqemb_mode=self.config.seqemb_mode.enabled,
         )
 
         return data
@@ -240,6 +241,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     path,
                     alignment_dir,
                     alignment_index,
+                    seqemb_mode=self.config.seqemb_mode.enabled,
                 )
             elif ext == ".pdb":
                 structure_index = None
@@ -252,6 +254,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     chain_id=chain_id,
                     alignment_index=alignment_index,
                     _structure_index=structure_index,
+                    seqemb_mode=self.config.seqemb_mode.enabled,
                 )
             else:
                 raise ValueError("Extension branch missing")
@@ -261,6 +264,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 fasta_path=path,
                 alignment_dir=alignment_dir,
                 alignment_index=alignment_index,
+                seqemb_mode=self.config.seqemb_mode.enabled,
             )
 
         if self._output_raw:
