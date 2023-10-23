@@ -244,6 +244,17 @@ class AlphaFold(nn.Module):
         pair_mask = seq_mask[..., None] * seq_mask[..., None, :]
         msa_mask = feats["msa_mask"]
 
+        # AF EDIT  #####
+        # Try adding MSA bias
+
+        feats["msa_feat"][:, :, 25:48] = (
+            feats["msa_feat"][:, :, 25:48] + feats["msa_feat_bias"]
+        )
+
+        # msa_feat = msa_feat.at[:,:,25:48].set(msa_feat[:,:,25:48]+feats['msa_feat_bias']) #jax
+        # feats["msa_feat"][:, :, 25:48] += feats["msa_feat_bias"]  # pytorch
+        #########
+
         ## Initialize the MSA and pair representations
 
         # m: [*, S_c, N, C_m]
@@ -524,4 +535,4 @@ class AlphaFold(nn.Module):
         # Run auxiliary heads
         outputs.update(self.aux_heads(outputs))
 
-        return outputs, feats
+        return outputs

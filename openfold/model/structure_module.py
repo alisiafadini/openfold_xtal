@@ -41,6 +41,9 @@ from openfold.utils.tensor_utils import (
     flatten_final_dims,
 )
 
+from openfold.utils.feats import atom14_to_atom37
+
+
 attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
 
 
@@ -625,7 +628,6 @@ class StructureModule(nn.Module):
         mask=None,
         inplace_safe=False,
         _offload_inference=False,
-        af_noiseterm=0.0,
     ):
         """
         Args:
@@ -643,6 +645,8 @@ class StructureModule(nn.Module):
             A dictionary of outputs
         """
         s = evoformer_output_dict["single"]
+        # AF EDIT
+        # s = evoformer_output_dict["s"]
 
         if mask is None:
             # [*, N]
@@ -652,7 +656,9 @@ class StructureModule(nn.Module):
         s = self.layer_norm_s(s)
 
         # [*, N, N, C_z]
+        # AF EDIT
         z = self.layer_norm_z(evoformer_output_dict["pair"])
+        # z = self.layer_norm_z(evoformer_output_dict["z"])
 
         z_reference_list = None
         if _offload_inference:
@@ -676,6 +682,7 @@ class StructureModule(nn.Module):
         outputs = []
         for i in range(self.no_blocks):
             # [*, N, C_s]
+
             s = s + self.ipa(
                 s,
                 z,
@@ -705,14 +712,10 @@ class StructureModule(nn.Module):
             backb_to_global = backb_to_global.scale_translation(self.trans_scale_factor)
 
             # [*, N, 7, 2]
-            unnormalized_angles, angles = self.angle_resnet(
-                s, s_initial
-            )  # Lines 11-14 Algorithm 20
-
+            unnormalized_angles, angles = self.angle_resnet(s, s_initial)
+            # Lines 11-14 Algorithm 20
             all_frames_to_global = self.torsion_angles_to_frames(
-                backb_to_global,
-                angles,
-                aatype,
+                backb_to_global, angles, aatype
             )
 
             pred_xyz = self.frames_and_literature_positions_to_atom14_pos(
@@ -741,7 +744,9 @@ class StructureModule(nn.Module):
             evoformer_output_dict["pair"] = evoformer_output_dict["pair"].to(s.device)
 
         outputs = dict_multimap(torch.stack, outputs)
+        # AF EDIT
         outputs["single"] = s
+        # outputs["s"] = s
 
         # AF EDIT
         outputs["sinitial"] = s_initial
@@ -812,3 +817,192 @@ class StructureModule(nn.Module):
             self.atom_mask,
             self.lit_positions,
         )
+
+    # AF EDIT (YEQING)
+
+    def decode(self, ipa_output_dict):
+        s = ipa_output_dict["single"]
+        aatype = ipa_output_dict["aatype"]
+
+        rigids = Rigid.identity(
+            s.shape[:-1],
+            s.dtype,
+            s.device,
+            self.training,
+            fmt="quat",
+        )
+
+        # [*, N]
+        rigids = rigids.compose_q_update_vec(self.bb_update(s))
+
+        # To hew as closely as possible to AlphaFold, we convert our
+        # quaternion-based transformations to rotation-matrix ones
+        # here
+        backb_to_global = Rigid(
+            Rotation(rot_mats=rigids.get_rots().get_rot_mats(), quats=None),
+            rigids.get_trans(),
+        )
+
+        backb_to_global = backb_to_global.scale_translation(self.trans_scale_factor)
+
+        # [*, N, 7, 2]
+        unnormalized_angles, angles = self.angle_resnet(s, s)
+
+        all_frames_to_global = self.torsion_angles_to_frames(
+            backb_to_global, angles, aatype  # [:, 0],  # AF EDIT
+        )
+
+        pred_xyz_atom14 = self.frames_and_literature_positions_to_atom14_pos(
+            all_frames_to_global, aatype  # [:, 0],  # AF EDIT
+        )
+        pred_xyz_atom37 = atom14_to_atom37(pred_xyz_atom14, ipa_output_dict)
+
+        scaled_rigids = rigids.scale_translation(self.trans_scale_factor)
+
+        pred = {
+            "frames": scaled_rigids.to_tensor_7(),
+            "sidechain_frames": all_frames_to_global.to_tensor_4x4(),
+            "unnormalized_angles": unnormalized_angles,
+            "angles": angles,
+            "positions": pred_xyz_atom37,
+        }
+
+        return pred
+
+    def decode_alisia(
+        self,
+        evoformer_output_dict,
+        aatype,
+        mask=None,
+        inplace_safe=False,
+        _offload_inference=False,
+    ):
+        """
+        Args:
+            evoformer_output_dict:
+                Dictionary containing:
+                    "single":
+                        [*, N_res, C_s] single representation
+                    "pair":
+                        [*, N_res, N_res, C_z] pair representation
+            aatype:
+                [*, N_res] amino acid indices
+            mask:
+                Optional [*, N_res] sequence mask
+        Returns:
+            A dictionary of outputs
+        """
+        s = evoformer_output_dict["single"]
+        # AF EDIT
+        # s = evoformer_output_dict["s"]
+
+        if mask is None:
+            # [*, N]
+            mask = s.new_ones(s.shape[:-1])
+
+        # [*, N, C_s]
+        s = self.layer_norm_s(s)
+
+        # [*, N, N, C_z]
+        # AF EDIT
+        z = self.layer_norm_z(evoformer_output_dict["pair"])
+
+        # print("single is")
+        # print(s)
+        # print("pair is")
+        # print(z)
+        # z = self.layer_norm_z(evoformer_output_dict["z"])
+
+        z_reference_list = None
+        if _offload_inference:
+            assert sys.getrefcount(evoformer_output_dict["pair"]) == 2
+            evoformer_output_dict["pair"] = evoformer_output_dict["pair"].cpu()
+            z_reference_list = [z]
+            z = None
+
+        # [*, N, C_s]
+        s_initial = s
+        s = self.linear_in(s)
+
+        # [*, N]
+        rigids = Rigid.identity(
+            s.shape[:-1],
+            s.dtype,
+            s.device,
+            self.training,
+            fmt="quat",
+        )
+        outputs = []
+        for i in range(self.no_blocks):
+            # [*, N, C_s]
+
+            s = s + self.ipa(
+                s,
+                z,
+                rigids,
+                mask,
+                inplace_safe=inplace_safe,
+                _offload_inference=_offload_inference,
+                _z_reference_list=z_reference_list,
+            )
+            s = self.ipa_dropout(s)
+            s = self.layer_norm_ipa(s)  # Line 8 Algorithm 20
+            s = self.transition(s)
+
+            # [*, N]
+            rigids = rigids.compose_q_update_vec(
+                self.bb_update(s)
+            )  # Line 10 Algorithm 20
+
+            # To hew as closely as possible to AlphaFold, we convert our
+            # quaternion-based transformations to rotation-matrix ones
+            # here
+            backb_to_global = Rigid(
+                Rotation(rot_mats=rigids.get_rots().get_rot_mats(), quats=None),
+                rigids.get_trans(),
+            )
+
+            backb_to_global = backb_to_global.scale_translation(self.trans_scale_factor)
+
+            # [*, N, 7, 2]
+            unnormalized_angles, angles = self.angle_resnet(s, s_initial)
+            # Lines 11-14 Algorithm 20
+            all_frames_to_global = self.torsion_angles_to_frames(
+                backb_to_global, angles, aatype
+            )
+
+            pred_xyz = self.frames_and_literature_positions_to_atom14_pos(
+                all_frames_to_global,
+                aatype,
+            )
+
+            scaled_rigids = rigids.scale_translation(self.trans_scale_factor)
+            pred_xyz_atom37 = atom14_to_atom37(pred_xyz, evoformer_output_dict)
+
+            preds = {
+                "frames": scaled_rigids.to_tensor_7(),
+                "sidechain_frames": all_frames_to_global.to_tensor_4x4(),
+                "unnormalized_angles": unnormalized_angles,
+                "angles": angles,
+                "positions": pred_xyz_atom37,
+                "states": s,
+            }
+
+            outputs.append(preds)
+
+            rigids = rigids.stop_rot_gradient()
+
+        del z, z_reference_list
+
+        if _offload_inference:
+            evoformer_output_dict["pair"] = evoformer_output_dict["pair"].to(s.device)
+
+        outputs = dict_multimap(torch.stack, outputs)
+        # AF EDIT
+        outputs["single"] = s
+        # outputs["s"] = s
+
+        # AF EDIT
+        outputs["sinitial"] = s_initial
+
+        return outputs

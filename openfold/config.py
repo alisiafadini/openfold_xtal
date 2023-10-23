@@ -284,7 +284,7 @@ config = mlc.ConfigDict(
                 "max_recycling_iters": 20,
                 "msa_cluster_features": True,
                 "reduce_msa_clusters_by_max_templates": False,
-                "resample_msa_in_recycling": True,
+                "resample_msa_in_recycling": True,  # False,  # True, # AF EDIT
                 "template_features": [
                     "template_all_atom_positions",
                     "template_sum_probs",
@@ -343,7 +343,7 @@ config = mlc.ConfigDict(
             "train": {
                 "fixed_size": True,
                 "subsample_templates": True,
-                "masked_msa_replace_fraction": 0.15,
+                "masked_msa_replace_fraction": 0.15,  # 0.0,  # 0.15, #AF EDIT
                 "max_msa_clusters": 128,
                 "max_extra_msa": 1024,
                 "max_template_hits": 4,

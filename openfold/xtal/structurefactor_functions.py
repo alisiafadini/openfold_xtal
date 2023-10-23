@@ -28,7 +28,6 @@ def initialize_model_frac_pos(model_file, tng_file):
         set_experiment=True,
         testset_value=0,
     )
-
     target_pos = sfcalculator_model.atom_pos_orth
     sfcalculator_model.atom_pos_frac = sfcalculator_model.atom_pos_frac * 0.00
     sfcalculator_model.atom_pos_orth = sfcalculator_model.atom_pos_orth * 0.00
