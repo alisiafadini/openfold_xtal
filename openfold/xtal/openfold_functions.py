@@ -199,138 +199,72 @@ def normalize_modelFs(sfcalculator_model, data_dict):
     return Emodel, data_dict
 
 
-def run_optimization_step(
-    model,
-    data_dict,
-    feats,
-    target_pos,
+def LLG_computation(
     epoch,
-    optimizer,
-    update,
-    batches=1,
-    verbose=False,
-):
-    batch_size = int(len(data_dict["EDATA"]) / batches)
-    new_Edata = IndexedDataset(data_dict["EDATA"])
-    data_loader = DataLoader(new_Edata, batch_size=batch_size, shuffle=False)
-
-    for batch_data, batch_indices in data_loader:
-        optimizer.zero_grad()
-
-        current_pos, af2_pos, plddt = run_structure_module(
-            model, feats, model["AF_model"]
-        )
-
-        aligned_pos = align_positions(current_pos, target_pos).to(dsutils.try_gpu())
-        sfcalculator_model = transfer_positions(
-            aligned_pos, model["sfcalculator_model"]
-        )
-        Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict)
-
-        if epoch % update == 0:
-            # update sigmaA
-            sigmaA = sigmaa.sigmaA_from_model(
-                data_dict["ETRUE"],
-                data_dict["PHITRUE"],
-                sfcalculator_model,
-                data_dict["EPS"],
-                data_dict["SIGMAP"],
-                data_dict["BIN_LABELS"],
-            )
-            sigmaA = torch.clamp(
-                torch.tensor(sigmaA).to(dsutils.try_gpu()), 0.001, 0.999
-            )
-            data_dict["SIGMAA"] = sigmaA
-
-        else:
-            sigmaA = data_dict["SIGMAA"]
-
-        llg = run_ML_binloop(
-            data_dict["UNIQUE_LABELS"],
-            batch_data,
-            Emodel[batch_indices],
-            data_dict["BIN_LABELS"][batch_indices],
-            sigmaA,
-            data_dict["CENTRIC"][batch_indices],
-            data_dict["DOBS"][batch_indices],
-        )
-
-        loss = -llg
-        loss.backward()
-        optimizer.step()
-
-        # Print the loss during training (example)
-        if verbose:
-            if epoch % 10 == 0:
-                print(f"Epoch: {epoch}, Loss: {loss.item()}")
-                print("SigmaA tensor: ", sigmaA)
-
-    return af2_pos, loss
-
-
-def XYZ_refine(
-    AF_model,
-    sfcalculator_model,
-    data_dict,
-    evo_output,
+    runner,
     feats,
+    data_dict,
+    sfcalculator,
     target_pos,
-    noise_term,
-    lr_p,
-    lr_s,
-    num_epochs,
-    gamma,
-    batches=1,
-    verbose=False,
     update=50,
-    evo_out=False,
+    verbose=False,
+    device=dsutils.try_gpu(),
 ):
-    # copy evo_output to prevent carrying on gradients across iterations
-    new_evo = copy.deepcopy(evo_output)
-    single_noise = torch.randn_like(evo_output["single"]).to(torch.device("cuda:1"))
-    new_evo["single"] = new_evo["single"] + single_noise * (
-        noise_term  # * new_evo["single"].data.abs().sqrt()
-    )
-    single = new_evo["single"]
-    single.requires_grad_(True)
-
-    # single = new_evo["single"].requires_grad_(True)
-    pair = new_evo["pair"].requires_grad_(True)
-
-    model = {
-        "single": single,
-        "pair": pair,
-        "AF_model": AF_model,
-        "sfcalculator_model": sfcalculator_model,
-    }
-
-    optimizer = torch.optim.Adam(
-        [{"params": single, "lr": lr_s}, {"params": pair, "lr": lr_p}]
+    # predict positions
+    current_pos, plddt, pdb, b_factors = runner_prediction(runner, feats)
+    aligned_pos = align_positions(
+        current_pos,
+        target_pos,
+        bfacts=torch.from_numpy(b_factors).to(device),
     )
 
-    scheduler = ExponentialLR(optimizer, gamma=gamma, verbose=False)
+    # convert to XYZ model
 
-    for epoch in tqdm(range(num_epochs)):
-        result = run_optimization_step(
-            model,
-            data_dict,
-            feats,
-            target_pos,
-            epoch,
-            optimizer,
-            update,
-            batches,
-            verbose,
+    sfcalculator_model = transfer_positions(
+        aligned_pos, sfcalculator, torch.tensor(b_factors).to(dsutils.try_gpu())
+    )
+
+    Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict)
+
+    # update sigmaA if needed
+
+    if epoch % update == 0:
+        # update sigmaA
+        sigmaA = sigmaa.sigmaA_from_model(
+            data_dict["ETRUE"],
+            data_dict["PHITRUE"],
+            sfcalculator_model,
+            data_dict["EPS"],
+            data_dict["SIGMAP"],
+            data_dict["BIN_LABELS"],
         )
+        sigmaA = torch.clamp(torch.tensor(sigmaA).to(dsutils.try_gpu()), 0.001, 0.999)
+        data_dict["SIGMAA"] = sigmaA
 
-        scheduler.step()
-
-    if evo_out:
-        return result, new_evo
     else:
-        return result
+        sigmaA = data_dict["SIGMAA"]
+
+    # calculate LLG
+
+    llg = run_ML_binloop(
+        data_dict["UNIQUE_LABELS"],
+        data_dict["EDATA"],
+        Emodel,
+        data_dict["BIN_LABELS"],
+        sigmaA,
+        data_dict["CENTRIC"],
+        data_dict["DOBS"],
+    )
+
+    if verbose:
+        if epoch % 10 == 0:
+            print(f"Epoch: {epoch}, Loss: -{llg.item()}")
+            print("SigmaA tensor: ", sigmaA)
+
+    return llg, plddt, pdb, aligned_pos
 
 
+"""
 def af2runner_optimization_step(
     pdb,
     si,
@@ -413,109 +347,4 @@ def af2runner_optimization_step(
         "loss": loss,
     }
 
-
-def af2runner_refine(
-    pdb,
-    si,
-    # evo_output_dict,
-    seq,
-    af2runner,
-    sfcalculator_model,
-    data_dict,
-    target_pos,
-    noise_term,
-    lr_s,
-    num_epochs,
-    gamma,
-    batches=1,
-    verbose=False,
-    update=50,
-):
-    single_noise = torch.randn_like(si).to(torch.device("cuda:1"))
-    si_withnoise = si + single_noise * noise_term
-    si_withnoise.requires_grad_(True)
-    # pair = evo_output_dict["pair"].requires_grad_(True)
-    # optimizer = torch.optim.Adam(
-    #    [{"params": si_withnoise, "lr": lr_s}, {"params": pair, "lr": 0.0005}]
-    # )
-
-    optimizer = torch.optim.Adam([{"params": si_withnoise, "lr": lr_s}])
-
-    scheduler = ExponentialLR(optimizer, gamma=gamma, verbose=False)
-    for epoch in tqdm(range(num_epochs)):
-        af2_out = af2runner_optimization_step(
-            pdb,
-            si_withnoise,
-            # evo_output_dict,
-            seq,
-            af2runner,
-            sfcalculator_model,
-            data_dict,
-            target_pos,
-            epoch,
-            optimizer,
-            update,
-            batches,
-            verbose,
-        )
-
-        scheduler.step()
-
-    return af2_out
-
-
-def LLG_computation(
-    epoch, runner, feats, data_dict, sfcalculator, target_pos, update=50, verbose=False
-):
-    # predict positions
-    current_pos, plddt, pdb, b_factors = runner_prediction(runner, feats)
-    aligned_pos = align_positions(
-        current_pos,
-        target_pos,
-        bfacts=torch.from_numpy(b_factors).to(dsutils.try_gpu()).to(dsutils.try_gpu()),
-    )
-
-    # convert to XYZ model
-
-    sfcalculator_model = transfer_positions(
-        aligned_pos, sfcalculator, torch.tensor(b_factors).to(dsutils.try_gpu())
-    )
-
-    Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict)
-
-    # update sigmaA if needed
-
-    if epoch % update == 0:
-        # update sigmaA
-        sigmaA = sigmaa.sigmaA_from_model(
-            data_dict["ETRUE"],
-            data_dict["PHITRUE"],
-            sfcalculator_model,
-            data_dict["EPS"],
-            data_dict["SIGMAP"],
-            data_dict["BIN_LABELS"],
-        )
-        sigmaA = torch.clamp(torch.tensor(sigmaA).to(dsutils.try_gpu()), 0.001, 0.999)
-        data_dict["SIGMAA"] = sigmaA
-
-    else:
-        sigmaA = data_dict["SIGMAA"]
-
-    # calculate LLG
-
-    llg = run_ML_binloop(
-        data_dict["UNIQUE_LABELS"],
-        data_dict["EDATA"],
-        Emodel,
-        data_dict["BIN_LABELS"],
-        sigmaA,
-        data_dict["CENTRIC"],
-        data_dict["DOBS"],
-    )
-
-    if verbose:
-        if epoch % 10 == 0:
-            print(f"Epoch: {epoch}, Loss: -{llg.item()}")
-            print("SigmaA tensor: ", sigmaA)
-
-    return llg, plddt, pdb, aligned_pos
+"""

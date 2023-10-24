@@ -36,7 +36,7 @@ class AF2Runner:
         template_mask_sidechain=False,
     ):
         """
-        Initialization.
+        Initialization.≠
 
         Params:
                 preset: model name, for example, model_1_ptm
@@ -53,11 +53,6 @@ class AF2Runner:
         # Note: recycling is disabled
         self.config = model_config(preset, train=True)
         self.config.data.common.max_recycling_iters = 0  # 50
-
-        print(
-            "Number of recycling iterations is",
-            self.config.data.common.max_recycling_iters,
-        )
 
         # laod feature pipeline
         self.pipeline = feature_pipeline.FeaturePipeline(self.config.data)
@@ -219,8 +214,6 @@ class AF2Runner:
             expanded_tensor = temp_features[key].repeat(*repeats[1:])
             new_features[key] = expanded_tensor
 
-            # print("after")
-
         # run alphafold
         results = self.af2(new_features)
 
@@ -255,8 +248,6 @@ class AF2Runner:
                 template_pdb: pdb filepath for template protein
         """
         features = self.compute_features(template_pdb)
-        outputs = self.af2(features)
-        print(outputs["plddt"].mean())
 
         return None
 
