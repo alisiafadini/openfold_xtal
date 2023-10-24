@@ -19,6 +19,49 @@ from openfold.xtal.structurefactor_functions import (
 from xtalLLG import dsutils, structurefactors, coordinates, sigmaa
 
 
+def move_tensors_to_device_inplace(processed_features, device=dsutils.try_gpu()):
+    """
+    Moves PyTorch tensors in a dictionary to the specified device in-place.
+
+    Args:
+        processed_features (dict): Dictionary containing tensors.
+        device (str): Device to move tensors to (e.g., "cuda:0", "cpu").
+    """
+    # Iterate through the keys and values in the input dictionary
+    for key, value in processed_features.items():
+        # Check if the value is a PyTorch tensor
+        if isinstance(value, torch.Tensor):
+            # Move the tensor to the specified device in-place
+            processed_features[key] = value.to(device)
+
+
+def move_tensors_to_device(processed_features, device=dsutils.try_gpu()):
+    """
+    Moves PyTorch tensors in a dictionary to the specified device.
+
+    Args:
+        processed_features (dict): Dictionary containing tensors.
+        device (str): Device to move tensors to (e.g., "cuda:0", "cpu").
+
+    Returns:
+        dict: Dictionary with tensors moved to the specified device.
+    """
+    # Create a new dictionary to store processed features with tensors moved to the device
+    processed_features_on_device = {}
+
+    # Iterate through the keys and values in the input dictionary
+    for key, value in processed_features.items():
+        # Check if the value is a PyTorch tensor
+        if isinstance(value, torch.Tensor):
+            # Move the tensor to the specified device
+            value = value.to(device)
+        # Add the key-value pair to the new dictionary
+        processed_features_on_device[key] = value
+
+    # Return the new dictionary with tensors moved to the device
+    return processed_features_on_device
+
+
 def extract_allatoms(outputs, feats):
     atom_types = residue_constants.atom_types
     pdb_lines = []
@@ -163,14 +206,19 @@ def align_positions(current_pos, target_pos, bfacts=None):
     return aligned_pos
 
 
-def transfer_positions(aligned_pos, sfcalculator_model, b_factors):
+def transfer_positions(
+    aligned_pos, sfcalculator_model, b_factors, device=dsutils.try_gpu()
+):
     # Transfer positions to sfcalculator
     frac_pos = coordinates.fractionalize_torch(
         aligned_pos,
         sfcalculator_model.unit_cell,
         sfcalculator_model.space_group,
+        device=device,
     )
-    sfcalculator_model = set_new_positions(aligned_pos, frac_pos, sfcalculator_model)
+    sfcalculator_model = set_new_positions(
+        aligned_pos, frac_pos, sfcalculator_model, device=device
+    )
 
     # add bfactor calculation based on plddt
     sfcalculator_model.atom_b_iso = b_factors
@@ -213,15 +261,13 @@ def LLG_computation(
     # predict positions
     current_pos, plddt, pdb, b_factors = runner_prediction(runner, feats)
     aligned_pos = align_positions(
-        current_pos,
-        target_pos,
-        bfacts=torch.from_numpy(b_factors).to(device),
+        current_pos, target_pos, bfacts=torch.from_numpy(b_factors).to(device)
     )
 
     # convert to XYZ model
 
     sfcalculator_model = transfer_positions(
-        aligned_pos, sfcalculator, torch.tensor(b_factors).to(dsutils.try_gpu())
+        aligned_pos, sfcalculator, torch.tensor(b_factors).to(device), device=device
     )
 
     Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict)
@@ -238,7 +284,7 @@ def LLG_computation(
             data_dict["SIGMAP"],
             data_dict["BIN_LABELS"],
         )
-        sigmaA = torch.clamp(torch.tensor(sigmaA).to(dsutils.try_gpu()), 0.001, 0.999)
+        sigmaA = torch.clamp(torch.tensor(sigmaA).to(device), 0.001, 0.999)
         data_dict["SIGMAA"] = sigmaA
 
     else:

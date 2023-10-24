@@ -20,13 +20,14 @@ class IndexedDataset(Dataset):
         return batch, batch_indices
 
 
-def initialize_model_frac_pos(model_file, tng_file):
+def initialize_model_frac_pos(model_file, tng_file, device=dsutils.try_gpu()):
     sfcalculator_model = SFcalculator(
         model_file,
         tng_file,
         expcolumns=["FP", "SIGFP"],
         set_experiment=True,
         testset_value=0,
+        device=device,
     )
     target_pos = sfcalculator_model.atom_pos_orth
     sfcalculator_model.atom_pos_frac = sfcalculator_model.atom_pos_frac * 0.00
@@ -36,9 +37,9 @@ def initialize_model_frac_pos(model_file, tng_file):
     return sfcalculator_model, target_pos
 
 
-def set_new_positions(orth_pos, frac_pos, sfmodel):
-    sfmodel.atom_pos_orth = torch.squeeze(orth_pos, dim=1).to(dsutils.try_gpu())
-    sfmodel.atom_pos_frac = torch.squeeze(frac_pos, dim=1).to(dsutils.try_gpu())
+def set_new_positions(orth_pos, frac_pos, sfmodel, device=dsutils.try_gpu()):
+    sfmodel.atom_pos_orth = torch.squeeze(orth_pos, dim=1).to(device)
+    sfmodel.atom_pos_frac = torch.squeeze(frac_pos, dim=1).to(device)
     return sfmodel
 
 
@@ -51,15 +52,15 @@ def update_sfcalculator(sfmodel):
     return sfmodel
 
 
-def load_tng_data(tng_file):
+def load_tng_data(tng_file, device=dsutils.try_gpu()):
     tng = dsutils.load_mtz(tng_file).dropna()
 
     # Generate PhaserTNG tensors
-    eps = torch.tensor(tng["EPS"].values, device=dsutils.try_gpu())
-    centric = torch.tensor(tng["CENT"].values, device=dsutils.try_gpu()).bool()
-    dobs = torch.tensor(tng["DOBS"].values, device=dsutils.try_gpu())
-    feff = torch.tensor(tng["FEFF"].values, device=dsutils.try_gpu())
-    bin_labels = torch.tensor(tng["BIN"].values, device=dsutils.try_gpu())
+    eps = torch.tensor(tng["EPS"].values, device=device)
+    centric = torch.tensor(tng["CENT"].values, device=device).bool()
+    dobs = torch.tensor(tng["DOBS"].values, device=device)
+    feff = torch.tensor(tng["FEFF"].values, device=device)
+    bin_labels = torch.tensor(tng["BIN"].values, device=device)
     unique_labels = torch.unique(bin_labels)
 
     sigmaN = structurefactors.calculate_Sigma_atoms(feff, eps, bin_labels)
