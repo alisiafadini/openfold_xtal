@@ -6,7 +6,7 @@ from pytorch_lightning.profiler import PyTorchProfiler
 from openfold.xtal.openfold_functions import LLG_computation, move_tensors_to_device
 
 
-class MyLightningModule(pl.LightningModule):
+class MsaBiasModule(pl.LightningModule):
     def __init__(
         self,
         device,
@@ -27,6 +27,7 @@ class MyLightningModule(pl.LightningModule):
         self.tng_dict = tng_dict
         self.sfcalculator_model = sfcalculator_model
         self.target_pos = target_pos
+        self.profiler = PyTorchProfiler(use_cuda=True)
 
         # Define msa_params tensor as a parameter
         self.msa_params = nn.Parameter(
@@ -52,7 +53,7 @@ class MyLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=self.lr)
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx):  # Depending on batch use
         loss, plddt, pdb = self.forward()
         self.log("plddt", torch.mean(plddt))
         return loss
@@ -63,10 +64,10 @@ class MyLightningModule(pl.LightningModule):
         self.log("avg_loss", avg_loss, prog_bar=True)
 
 
-# Initialize your lightning module
+# Initialize lightning module
 lr_s = 1e-3
 num_epochs = 2000
-lightning_module = MyLightningModule(
+lightning_module = MsaBiasModule(
     device,
     lr_s,
     num_epochs,
@@ -80,9 +81,11 @@ lightning_module = MyLightningModule(
 # Initialize a Lightning Trainer
 trainer = pl.Trainer(
     max_epochs=num_epochs,
-    gpus=1 if device == "cuda:0" else 0,  # Specify the number of GPUs
-    progress_bar_refresh_rate=10,  # Adjust this value as needed
+    gpus=1 if device == "cuda:0" else 0,
+    progress_bar_refresh_rate=10,
+    profiler=self.profiler,
 )
 
 # Train the model
 trainer.fit(lightning_module)
+print(trainer.profiler_results)
