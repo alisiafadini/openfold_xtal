@@ -70,6 +70,7 @@ class AF2Runner:
         model_basename = get_model_basename(path)
         model_version = "_".join(model_basename.split("_")[1:])
         import_jax_weights_(model, path, version=model_version)
+        model = model.eval()  # AF edit
         model = model.to(self.device)
         return model
 

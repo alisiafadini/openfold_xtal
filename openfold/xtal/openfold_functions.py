@@ -176,10 +176,14 @@ def align_tensors(tensor1, centroid1, centroid2, rotation_matrix):
     return aligned_tensor1
 
 
-def select_confident_atoms(current_pos, target_pos, bfacts):
-    # Boolean mask for confident atoms
-    mask = bfacts < 11.5
-    reshaped_mask = mask.unsqueeze(1).expand_as(current_pos)
+def select_confident_atoms(current_pos, target_pos, bfacts=None):
+    if bfacts is None:
+        # If bfacts is None, set mask to all True
+        reshaped_mask = torch.ones_like(current_pos, dtype=torch.bool)
+    else:
+        # Boolean mask for confident atoms
+        mask = bfacts < 11.5
+        reshaped_mask = mask.unsqueeze(1).expand_as(current_pos)
 
     # Select confident atoms using the mask
     current_pos_conf = torch.flatten(current_pos)[torch.flatten(reshaped_mask)]

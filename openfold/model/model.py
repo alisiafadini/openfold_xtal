@@ -260,8 +260,6 @@ class AlphaFold(nn.Module):
             feats["msa_feat"][:, :, 25:48] + feats["msa_feat_bias"]
         )
 
-        # msa_feat = msa_feat.at[:,:,25:48].set(msa_feat[:,:,25:48]+feats['msa_feat_bias']) #jax
-        # feats["msa_feat"][:, :, 25:48] += feats["msa_feat_bias"]  # pytorch
         #########
 
         ## Initialize the MSA and pair representations
@@ -527,7 +525,8 @@ class AlphaFold(nn.Module):
         is_grad_enabled = torch.is_grad_enabled()
 
         # Main recycling loop
-        num_iters = batch["aatype"].shape[-1]
+        # num_iters = batch["aatype"].shape[-1]
+        num_iters = 1  # AF EDIT
         for cycle_no in range(num_iters):
             # Select the features for the current recycling cycle
             fetch_cur_batch = lambda t: t[..., cycle_no]

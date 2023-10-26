@@ -151,7 +151,7 @@ def model_config(name, train=False, low_prec=False, long_sequence_inference=Fals
         c.data.eval.max_msa_clusters = 1
         c.data.train.max_distillation_msa_clusters = 1
         c.data.train.crop_size = 384
-        c.loss.violation.weight = 1.
+        c.loss.violation.weight = 1.0
         c.loss.experimentally_resolved.weight = 0.01
     elif name == "seq_model_esm1b":
         c.data.common.use_templates = True
@@ -342,8 +342,8 @@ config = mlc.ConfigDict(
                 "use_templates": templates_enabled,
                 "use_template_torsion_angles": embed_template_torsion_angles,
             },
-            "seqemb_mode": { # Configuration for sequence embedding mode
-                "enabled": False, # If True, use seq emb instead of MSA
+            "seqemb_mode": {  # Configuration for sequence embedding mode
+                "enabled": False,  # If True, use seq emb instead of MSA
             },
             "supervised": {
                 "clamp_prob": 0.9,
@@ -409,7 +409,7 @@ config = mlc.ConfigDict(
         },
         # Recurring FieldReferences that can be changed globally here
         "globals": {
-            "seqemb_mode_enabled": False, # Global flag for enabling seq emb mode
+            "seqemb_mode_enabled": False,  # Global flag for enabling seq emb mode
             "blocks_per_ckpt": blocks_per_ckpt,
             "chunk_size": chunk_size,
             # Use Staats & Rabe's low-memory attention algorithm. Mutually
@@ -661,30 +661,32 @@ config = mlc.ConfigDict(
     }
 )
 
-seq_mode_config = mlc.ConfigDict({
-    "data": {
-        "common": {
-            "feat": {
-                "seq_embedding": [NUM_RES, None],
+seq_mode_config = mlc.ConfigDict(
+    {
+        "data": {
+            "common": {
+                "feat": {
+                    "seq_embedding": [NUM_RES, None],
+                },
+                "seqemb_features": [  # List of features to be generated in seqemb mode
+                    "seq_embedding"
+                ],
             },
-            "seqemb_features": [ # List of features to be generated in seqemb mode
-                "seq_embedding"
-            ],
+            "seqemb_mode": {  # Configuration for sequence embedding mode
+                "enabled": True,  # If True, use seq emb instead of MSA
+            },
         },
-        "seqemb_mode": { # Configuration for sequence embedding mode
-            "enabled": True, # If True, use seq emb instead of MSA
+        "globals": {
+            "seqemb_mode_enabled": True,
         },
-    },
-    "globals": {
-        "seqemb_mode_enabled": True,
-    },
-    "model": {
-        "preembedding_embedder": { # Used in sequence embedding mode
-            "tf_dim": 22,
-            "preembedding_dim": preemb_dim_size,
-            "c_z": c_z,
-            "c_m": c_m,
-            "relpos_k": 32,
+        "model": {
+            "preembedding_embedder": {  # Used in sequence embedding mode
+                "tf_dim": 22,
+                "preembedding_dim": preemb_dim_size,
+                "c_z": c_z,
+                "c_m": c_m,
+                "relpos_k": 32,
+            },
         },
     }
-})
+)
