@@ -11,7 +11,6 @@ import openfold.np.protein as protein
 from openfold.utils.tensor_utils import tensor_tree_map
 
 from openfold.xtal.structurefactor_functions import (
-    IndexedDataset,
     run_ML_binloop,
     set_new_positions,
     update_sfcalculator,
@@ -68,7 +67,7 @@ def extract_allatoms(outputs, feats):
     atom_mask = outputs["final_atom_mask"]
     aatype = feats["aatype"]
     atom_positions = outputs["final_atom_positions"]
-    residue_index = feats["residue_index"].to(torch.int32)
+    # residue_index = feats["residue_index"].to(torch.int32)
 
     n = aatype.shape[0]
     # Add all atom sites.
@@ -76,10 +75,32 @@ def extract_allatoms(outputs, feats):
         for atom_name, pos, mask in zip(atom_types, atom_positions[i], atom_mask[i]):
             if mask < 0.5:
                 continue
-
             pdb_lines.append(pos)
 
     return torch.stack(pdb_lines)
+
+
+def extract_atoms_and_backbone(outputs, feats):
+    atom_types = residue_constants.atom_types
+    atom_mask = outputs["final_atom_mask"]
+    pdb_lines = []
+    aatype = feats["aatype"]
+    atom_positions = outputs["final_atom_positions"]
+    selected_atoms_mask = []
+
+    n = aatype.shape[0]
+    for i in range(n):
+        for atom_name, pos, mask in zip(atom_types, atom_positions[i], atom_mask[i]):
+            if mask < 0.5:
+                continue
+            pdb_lines.append(pos)
+
+            if atom_name in ["C", "CA", "O", "N"]:
+                selected_atoms_mask.append(torch.tensor(1, dtype=torch.bool))
+            else:
+                selected_atoms_mask.append(torch.tensor(0, dtype=torch.bool))
+
+    return torch.stack(pdb_lines), torch.stack(selected_atoms_mask)
 
 
 def extract_bfactors(prot):
@@ -119,7 +140,8 @@ def run_structure_module(evo_output, feats, AF_model):
 
 def runner_prediction(af2runner, feats):
     results = af2runner.af2(feats)
-    current_pos_atoms = extract_allatoms(results, feats)
+    # current_pos_atoms = extract_allatoms(results, feats)
+    current_pos_atoms, backbone_mask = extract_atoms_and_backbone(results, feats)
 
     new_features_np = tensor_tree_map(
         lambda t: t[..., -1].cpu().detach().numpy(), feats
@@ -135,7 +157,7 @@ def runner_prediction(af2runner, feats):
         new_features_np, results_np, b_factors=update_bfactors(prot.b_factors)
     )
 
-    return current_pos_atoms, results["plddt"], prot, pseudo_bfactors
+    return current_pos_atoms, results["plddt"], prot, pseudo_bfactors, backbone_mask
 
 
 def convert_feat_tensors_to_numpy(dictionary):
@@ -238,14 +260,22 @@ def update_bfactors(plddts):
     return b_factors
 
 
-def normalize_modelFs(sfcalculator_model, data_dict):
+def normalize_modelFs(sfcalculator_model, data_dict, batch_indices=None):
     # Normalize for Emodel and Edata
     fmodel_amps = structurefactors.ftotal_amplitudes(sfcalculator_model, "Ftotal_HKL")
+    if batch_indices is not None:
+        fmodel_amps = fmodel_amps[batch_indices]
     sigmaP = structurefactors.calculate_Sigma_atoms(
-        fmodel_amps, data_dict["EPS"], data_dict["BIN_LABELS"]
+        fmodel_amps,
+        data_dict["EPS"],
+        data_dict["BIN_LABELS"],
     )
+
     Emodel = structurefactors.normalize_Fs(
-        fmodel_amps, data_dict["EPS"], sigmaP, data_dict["BIN_LABELS"]
+        fmodel_amps,
+        data_dict["EPS"],
+        sigmaP,
+        data_dict["BIN_LABELS"],
     )
     data_dict["SIGMAP"] = sigmaP
     return Emodel, data_dict
@@ -259,11 +289,12 @@ def LLG_computation(
     sfcalculator,
     target_pos,
     update=50,
+    batch_indices=None,
     verbose=False,
     device=dsutils.try_gpu(),
 ):
     # predict positions
-    current_pos, plddt, pdb, b_factors = runner_prediction(runner, feats)
+    current_pos, plddt, pdb, b_factors, backbone_mask = runner_prediction(runner, feats)
     aligned_pos = align_positions(
         current_pos, target_pos, bfacts=torch.from_numpy(b_factors).to(device)
     )
@@ -274,7 +305,7 @@ def LLG_computation(
         aligned_pos, sfcalculator, torch.tensor(b_factors).to(device), device=device
     )
 
-    Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict)
+    Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict, batch_indices)
 
     # update sigmaA if needed
 
@@ -282,12 +313,13 @@ def LLG_computation(
         # update sigmaA
         sigmaA = sigmaa.sigmaA_from_model(
             data_dict["ETRUE"],
-            data_dict["PHITRUE"],
+            dsutils.assert_numpy(data_dict["PHITRUE"]),
             sfcalculator_model,
             data_dict["EPS"],
             data_dict["SIGMAP"],
             data_dict["BIN_LABELS"],
         )
+
         sigmaA = torch.clamp(torch.tensor(sigmaA).to(device), 0.001, 0.999)
         data_dict["SIGMAA"] = sigmaA
 
@@ -297,7 +329,7 @@ def LLG_computation(
     # calculate LLG
 
     llg = run_ML_binloop(
-        data_dict["UNIQUE_LABELS"],
+        torch.unique(data_dict["BIN_LABELS"]),
         data_dict["EDATA"],
         Emodel,
         data_dict["BIN_LABELS"],
@@ -312,89 +344,3 @@ def LLG_computation(
             print("SigmaA tensor: ", sigmaA)
 
     return llg, plddt, pdb, aligned_pos
-
-
-"""
-def af2runner_optimization_step(
-    pdb,
-    si,
-    # evo_output_dict,
-    seq,
-    af2_runner,
-    sf_model,
-    data_dict,
-    target_pos,
-    epoch,
-    optimizer,
-    update,
-    batches=1,
-    verbose=False,
-):
-    batch_size = int(len(data_dict["EDATA"]) / batches)
-    new_Edata = IndexedDataset(data_dict["EDATA"])
-    data_loader = DataLoader(new_Edata, batch_size=batch_size, shuffle=False)
-
-    for batch_data, batch_indices in data_loader:
-        optimizer.zero_grad()
-        af2_runner.precompute(pdb)
-        outputs = af2_runner.compute(si, seq)
-        # outputs, new_features = af2_runner.compute_alisia(si, evo_output_dict)
-        current_pos = outputs["current_XYZ"].to(dsutils.try_gpu())
-        af2_pos = outputs["prot"].atom_positions
-        plddt = outputs["plddt"]
-        target_pos = target_pos.to(dsutils.try_gpu())
-        aligned_pos = align_positions(current_pos, target_pos, plddt).to(
-            dsutils.try_gpu()
-        )
-        sfcalculator_model = transfer_positions(aligned_pos, sf_model)
-        Emodel, data_dict = normalize_modelFs(sfcalculator_model, data_dict)
-        if epoch % update == 0:
-            sigmaA = sigmaa.sigmaA_from_model(
-                data_dict["ETRUE"],
-                data_dict["PHITRUE"],
-                sfcalculator_model,
-                data_dict["EPS"],
-                data_dict["SIGMAP"],
-                data_dict["BIN_LABELS"],
-            )
-            sigmaA = torch.clamp(
-                torch.tensor(sigmaA).to(dsutils.try_gpu()), 0.001, 0.999
-            )
-            data_dict["SIGMAA"] = sigmaA
-
-        else:
-            sigmaA = data_dict["SIGMAA"]
-
-        llg = run_ML_binloop(
-            data_dict["UNIQUE_LABELS"],
-            batch_data,
-            Emodel[batch_indices],
-            data_dict["BIN_LABELS"][batch_indices],
-            sigmaA,
-            data_dict["CENTRIC"][batch_indices],
-            data_dict["DOBS"][batch_indices],
-        )
-
-        loss_function = torch.nn.MSELoss()
-        loss = loss_function(aligned_pos, target_pos)
-
-        # loss = -llg
-        loss.backward()
-        optimizer.step()
-        # print("param grad", optimizer.param_groups[0]["params"])
-        # print("param grad", optimizer.param_groups[0]["params"][0].grad)
-
-        # Print the loss during training (example)
-        if verbose:
-            if epoch % 1 == 0:
-                print(f"Epoch: {epoch}, Loss: {loss.item()}")
-                # print("SigmaA tensor: ", sigmaA)
-                print("LLG", llg)
-
-    return {
-        "af2_positions": af2_pos,
-        "prot": outputs["prot"],
-        "loss": loss,
-    }
-
-"""

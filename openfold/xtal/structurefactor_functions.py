@@ -5,16 +5,16 @@ from SFC_Torch import SFcalculator
 
 
 class IndexedDataset(Dataset):
-    def __init__(self, dataset, transform=None, target_transform=None):
-        self.data = dataset
+    def __init__(self, tng_dict, transform=None, target_transform=None):
+        self.data = tng_dict
         self.transform = transform
         self.target_transform = target_transform
 
     def __len__(self):
-        return len(self.data)
+        return len(self.data["EDATA"])
 
     def __getitem__(self, idx):
-        batch = self.data[idx]
+        batch = {key: lst[idx] for key, lst in self.data.items()}
         batch_indices = idx
 
         return batch, batch_indices
@@ -61,7 +61,6 @@ def load_tng_data(tng_file, device=dsutils.try_gpu()):
     dobs = torch.tensor(tng["DOBS"].values, device=device)
     feff = torch.tensor(tng["FEFF"].values, device=device)
     bin_labels = torch.tensor(tng["BIN"].values, device=device)
-    unique_labels = torch.unique(bin_labels)
 
     sigmaN = structurefactors.calculate_Sigma_atoms(feff, eps, bin_labels)
     Edata = structurefactors.normalize_Fs(feff, eps, sigmaN, bin_labels)
@@ -73,7 +72,6 @@ def load_tng_data(tng_file, device=dsutils.try_gpu()):
         "DOBS": dobs,
         "FEFF": feff,
         "BIN_LABELS": bin_labels,
-        "UNIQUE_LABELS": unique_labels,
     }
 
     return data_dict

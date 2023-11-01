@@ -17,7 +17,7 @@ from xtalLLG import dsutils
 
 # General settings
 preset = "model_1"
-device = "cuda:0"
+device = "cuda:1"
 template_mask_sequence = False
 template_mask_sidechain = False
 
@@ -56,11 +56,15 @@ optimizer = torch.optim.Adam(
     [{"params": device_processed_features["msa_feat_bias"], "lr": lr_s}]
 )
 
-num_epochs = 2000
+num_epochs = 3000
 pdbs = []
 learning_rates = []
 plddt_losses = []
 total_losses = []
+
+# Add random noise
+noise_std = 1.0
+noise = torch.randn_like(device_processed_features["msa_feat_bias"]) * noise_std
 
 
 for epoch in tqdm(range(num_epochs)):
@@ -75,11 +79,14 @@ for epoch in tqdm(range(num_epochs)):
         tng_dict,
         sfcalculator_model,
         target_pos,
-        update=50,
+        update=100,
         verbose=False,
         device=device,
     )
     loss = -llg
+
+    # if epoch == 2000:
+    #    optimizer.param_groups[0]["lr"] = 1e-5
 
     mean_plddt = torch.round(torch.mean(plddt), decimals=3)
     plddt_losses.append(mean_plddt.item())
@@ -90,11 +97,20 @@ for epoch in tqdm(range(num_epochs)):
     learning_rates.append(current_lr)
 
     loss.backward()
+
+    if device_processed_features["msa_feat_bias"].grad is not None:
+        device_processed_features["msa_feat_bias"].grad = (
+            device_processed_features["msa_feat_bias"].grad + noise
+        )
+
     optimizer.step()
 
 # Write out final model
 with open(
-    "3hak/output_pdbs/LLG_{it}_{lr}_norec_nodropout.pdb".format(it=epoch, lr=lr_s), "w"
+    "3hak/output_pdbs/LLG_{it}_{lr}_norec_update100_noise1.0.pdb".format(
+        it=epoch, lr=lr_s
+    ),
+    "w",
 ) as file:
     file.write(protein.to_pdb(pdb))
 
@@ -128,4 +144,8 @@ plt.suptitle("MSA Biasing with MSE Backprop")
 
 # Adjust spacing between subplots
 plt.tight_layout()
-fig.savefig("3hak/output_pdbs/LLG_{it}_{lr}_norec.png".format(it=epoch, lr=lr_s))
+fig.savefig(
+    "3hak/output_pdbs/LLG_{it}_{lr}_norec_update100_noise1.0.png".format(
+        it=epoch, lr=lr_s
+    )
+)

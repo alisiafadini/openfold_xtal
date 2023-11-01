@@ -5,54 +5,66 @@ import pickle
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from openfold.xtal.openfold_functions import runner_prediction, align_positions
+from openfold.xtal.openfold_functions import (
+    runner_prediction,
+    align_positions,
+    move_tensors_to_device,
+)
 from openfold.xtal.structurefactor_functions import (
     load_tng_data,
     initialize_model_frac_pos,
 )
 from openfold.np import protein
-from xtalLLG import dsutils
-
 
 # General settings
+
 preset = "model_1"
-device = "cuda:0"
+device = "cuda:1"
 template_mask_sequence = False
 template_mask_sidechain = False
 
-# Load external files
-tng_file = "3hak/3hak-tng.mtz"
-tng_dict = load_tng_data(tng_file)
 
-input_pdb = "3hak/3hak_noalts.pdb"
+# Load external files and initiate runner instance
+tng_file = "../../run_openfold/3hak/3hak/3hak-tng.mtz"
+tng_dict = load_tng_data(tng_file, device=device)
 
-Etrue = np.load("3hak/3hak-Etrue.npy")
-phitrue = np.load("3hak/3hak-phitrue.npy")
+input_pdb = "../../run_openfold/3hak/3hak/3hak_noalts.pdb"
+
+Etrue = np.load("../../run_openfold/3hak/3hak/3hak-Etrue.npy")
+phitrue = np.load("../../run_openfold/3hak/3hak/3hak-phitrue.npy")
 tng_dict["ETRUE"] = Etrue
 tng_dict["PHITRUE"] = phitrue
 
-with open("3hak/3hak_processed_feats.pickle", "rb") as file:
+af2_runner = AF2Runner(preset, device, template_mask_sequence, template_mask_sidechain)
+
+with open("../../run_openfold/3hak/3hak/3hak_processed_feats.pickle", "rb") as file:
     # Load the data from the pickle file
     processed_features = pickle.load(file)
 
+device_processed_features = move_tensors_to_device(processed_features, device=device)
+del processed_features
 
-# Initiate runer and sfcalculator instances
-af2_runner = AF2Runner(preset, device, template_mask_sequence, template_mask_sidechain)
-sfcalculator_model, target_pos = initialize_model_frac_pos(input_pdb, tng_file)
+# Initiate sfcalculator
+sfcalculator_model, target_pos = initialize_model_frac_pos(
+    input_pdb, tng_file, device=device
+)
 
-# Initiate bias tensor
 msa_params = torch.zeros((512, 103, 23, 21), requires_grad=True, device=device)
-processed_features["msa_feat_bias"] = msa_params
+device_processed_features["msa_feat_bias"] = msa_params
 
-# Optimizer loop
 # Define optimizer
 lr_s = 1e-3  # OG: 0.0001
 optimizer = torch.optim.Adam(
-    [{"params": processed_features["msa_feat_bias"], "lr": lr_s}]
+    [{"params": device_processed_features["msa_feat_bias"], "lr": lr_s}]
 )
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode="min", factor=0.5, patience=20, threshold=1e-3, verbose=True
+)
+
 loss_function = torch.nn.MSELoss(reduction="sum")
 
-num_epochs = 2000
+num_epochs = 6000
 pdbs = []
 learning_rates = []
 plddt_losses = []
@@ -60,13 +72,11 @@ total_losses = []
 
 
 for epoch in tqdm(range(num_epochs)):
-    optimizer.zero_grad()
-
-    feats_copy = copy.deepcopy(processed_features)
-    feats_copy["msa_feat_bias"] = processed_features["msa_feat_bias"].clone()
+    feats_copy = copy.deepcopy(device_processed_features)
+    feats_copy["msa_feat_bias"] = device_processed_features["msa_feat_bias"].clone()
     current_pos, plddt, pdb, pseudo_bs = runner_prediction(af2_runner, feats_copy)
     mean_plddt = torch.round(torch.mean(plddt), decimals=3)
-    aligned_pos = align_positions(current_pos, target_pos).to(dsutils.try_gpu())
+    aligned_pos = align_positions(current_pos, target_pos).to(device)
     loss = loss_function(aligned_pos, target_pos)
 
     # print("Total loss : ", loss.item())
@@ -79,6 +89,12 @@ for epoch in tqdm(range(num_epochs)):
 
     loss.backward()
     optimizer.step()
+
+    if epoch == 5999:
+        print("Final loss is ", loss)
+    #    optimizer.param_groups[0]["lr"] = 1e-4
+    # scheduler.step(loss)
+
 
 # Write out final model
 with open("3hak/output_pdbs/MSE_{it}_{lr}.pdb".format(it=epoch, lr=lr_s), "w") as file:
